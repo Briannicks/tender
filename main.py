@@ -1,180 +1,198 @@
-from models.book import Book, BookCollection
+import sys
+
+from rich.console import Console
+from rich.panel import Panel
+from rich.prompt import Prompt
+from rich.table import Table
+
+from models.tender import Tender
+from models.tender_collection import TenderCollection
 from utils.auth import AuthManager
 from utils.decorators import admin_required, login_required
-from utils.validators import not_empty
+
+console = Console()
 
 
-class BookCLI:
-    def __init__(self, users_file="data/users.json", books_file="data/books.json"):
-        self.auth = AuthManager(users_file)
-        self.collection = BookCollection(books_file)
+class App:
+    def __init__(self):
         self.current_user = None
+        self.auth = AuthManager()
+        self.tenders = TenderCollection()
 
-    def run(self):
-        print("\nBOOK COLLECTION MANAGER")
-
-        while True:
-            if self.current_user is None:
-                self.guest_menu()
-            else:
-                self.user_menu()
-
-    def guest_menu(self):
-        print("\n1. Register")
-        print("2. Login")
-        print("3. Exit")
-
-        choice = input("Choose an option: ").strip()
-
-        if choice == "1":
-            self.register()
-        elif choice == "2":
-            self.login()
-        elif choice == "3":
-            print("Goodbye!")
-            raise SystemExit
-        else:
-            print("Invalid option. Please choose 1, 2 or 3.")
-
-    def user_menu(self):
-        print(f"\nWelcome, {self.current_user.name} ({self.current_user.role})")
-        print("1. View books")
-        print("2. Add book")
-        print("3. Search books")
-        print("4. Update book status")
-
-        if self.current_user.role == "admin":
-            print("5. Delete book")
-            print("6. Logout")
-        else:
-            print("5. Logout")
-
-        choice = input("Choose an option: ").strip()
-
-        if choice == "1":
-            self.view_books()
-        elif choice == "2":
-            self.add_book()
-        elif choice == "3":
-            self.search_books()
-        elif choice == "4":
-            self.update_status()
-        elif choice == "5" and self.current_user.role == "admin":
-            self.delete_book()
-        elif choice == "5" and self.current_user.role == "user":
-            self.logout()
-        elif choice == "6" and self.current_user.role == "admin":
-            self.logout()
-        else:
-            print("Invalid option.")
-
+    # ---------------- auth actions ----------------
     def register(self):
-        print("\nREGISTER")
-        name = input("Name: ").strip()
-        email = input("Email: ").strip()
-        password = input("Password: ")
-        role = input("Role (user/admin): ").strip().lower() or "user"
-
+        console.print("\n[bold]-- Register --[/bold]")
+        name = Prompt.ask("Name")
+        email = Prompt.ask("Email")
+        password = Prompt.ask("Password", password=True)
+        role = Prompt.ask("Role", choices=["user", "admin"], default="user")
         try:
-            self.current_user = self.auth.register(name, email, password, role)
-            print("Registration successful. You are now logged in.")
-        except ValueError as error:
-            print(f"Registration failed: {error}")
+            user = self.auth.register(name, email, password, role)
+            console.print(f"[green]Registered successfully:[/green] {user}")
+        except ValueError as e:
+            console.print(f"[red]Error:[/red] {e}")
 
     def login(self):
-        print("\nLOGIN")
-        email = input("Email: ").strip()
-        password = input("Password: ")
-
+        console.print("\n[bold]-- Login --[/bold]")
+        email = Prompt.ask("Email")
+        password = Prompt.ask("Password", password=True)
         user = self.auth.login(email, password)
-
-        if user:
-            self.current_user = user
-            print("Login successful.")
-        else:
-            print("Invalid email or password.")
+        if user is None:
+            console.print("[red]Invalid email or password.[/red]")
+            return
+        self.current_user = user
+        console.print(f"[green]Logged in as[/green] {user}")
 
     def logout(self):
+        console.print(f"[yellow]Logged out {self.current_user.name}.[/yellow]")
         self.current_user = None
-        print("You have logged out.")
+
+    # ---------------- tender actions ----------------
+    @login_required
+    def add_tender(self):
+        console.print("\n[bold]-- Add Tender --[/bold]")
+        title = Prompt.ask("Title")
+        description = Prompt.ask("Description")
+        deadline = Prompt.ask("Deadline (YYYY-MM-DD)")
+        budget = Prompt.ask("Budget")
+        try:
+            tender = Tender(
+                title=title,
+                description=description,
+                deadline=deadline,
+                budget=budget,
+                created_by=self.current_user.email,
+            )
+            self.tenders.add(tender)
+            console.print(f"[green]Tender created:[/green] {tender}")
+        except ValueError as e:
+            console.print(f"[red]Error:[/red] {e}")
 
     @login_required
-    def view_books(self):
-        books = self.collection.view_books()
-        self.display_books(books)
-
-    @login_required
-    def add_book(self):
-        print("\nADD BOOK")
-        title = input("Title: ").strip()
-        author = input("Author: ").strip()
-        genre = input("Genre: ").strip()
-
-        if not all([not_empty(title), not_empty(author), not_empty(genre)]):
-            print("Title, author and genre are required.")
+    def list_tenders(self):
+        console.print("\n[bold]-- Tenders --[/bold]")
+        items = self.tenders.all()
+        if not items:
+            console.print("[yellow]No tenders yet.[/yellow]")
             return
 
-        book = Book(
-            title=title,
-            author=author,
-            genre=genre,
-            status="Available",
-            added_by=self.current_user.email,
-        )
+        table = Table(title="Tenders", border_style="cyan")
+        for col in ("ID", "Title", "Status", "Budget", "Deadline", "Created By"):
+            table.add_column(col)
 
-        self.collection.add_book(book)
-        print("Book added successfully.")
-
-    @login_required
-    def search_books(self):
-        search_text = input("Search by title or author: ").strip()
-
-        if not not_empty(search_text):
-            print("Search text cannot be empty.")
-            return
-
-        books = self.collection.search_books(search_text)
-        self.display_books(books)
-
-    @login_required
-    def update_status(self):
-        title = input("Book title: ").strip()
-        status = input("New status (Available/Reading/Read): ").strip()
-
-        if not all([not_empty(title), not_empty(status)]):
-            print("Title and status are required.")
-            return
-
-        if self.collection.update_status(title, status):
-            print("Book status updated.")
-        else:
-            print("Book not found.")
+        status_colors = {"open": "green", "closed": "red", "awarded": "blue"}
+        for t in items:
+            color = status_colors.get(t.status, "white")
+            table.add_row(
+                str(t.id),
+                t.title,
+                f"[{color}]{t.status}[/{color}]",
+                str(t.budget),
+                str(t.deadline),
+                t.created_by,
+            )
+        console.print(table)
 
     @admin_required
-    def delete_book(self):
-        title = input("Book title to delete: ").strip()
-
-        if self.collection.delete_book(title):
-            print("Book deleted.")
-        else:
-            print("Book not found.")
-
-    @staticmethod
-    def display_books(books):
-        if not books:
-            print("No books found.")
+    def close_tender(self):
+        console.print("\n[bold]-- Close Tender --[/bold]")
+        self.list_tenders()
+        tender_id = Prompt.ask("Tender ID to close")
+        tender = self.tenders.find_by_id(_safe_int(tender_id))
+        if tender is None:
+            console.print("[red]Tender not found.[/red]")
             return
+        tender.close()
+        self.tenders.update(tender)
+        console.print(f"[green]Tender closed:[/green] {tender}")
 
-        print("\nBOOKS")
-        for number, book in enumerate(books, start=1):
-            print(
-                f"{number}. {book.title} | {book.author} | "
-                f"{book.genre} | {book.status}"
-            )
+    @admin_required
+    def award_tender(self):
+        console.print("\n[bold]-- Award Tender --[/bold]")
+        self.list_tenders()
+        tender_id = Prompt.ask("Tender ID to award")
+        tender = self.tenders.find_by_id(_safe_int(tender_id))
+        if tender is None:
+            console.print("[red]Tender not found.[/red]")
+            return
+        tender.award()
+        self.tenders.update(tender)
+        console.print(f"[green]Tender awarded:[/green] {tender}")
+
+
+def _safe_int(value):
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return -1
+
+
+def show_logged_out_menu():
+    console.print(Panel(
+        "[bold cyan]1[/bold cyan]. Register\n"
+        "[bold cyan]2[/bold cyan]. Login\n"
+        "[bold cyan]3[/bold cyan]. Exit",
+        title="Tender Management System",
+        border_style="cyan",
+    ))
+
+
+def show_logged_in_menu(app):
+    lines = (
+        "[bold cyan]1[/bold cyan]. Add Tender\n"
+        "[bold cyan]2[/bold cyan]. List Tenders\n"
+    )
+    if app.current_user.role == "admin":
+        lines += (
+            "[bold cyan]3[/bold cyan]. Close Tender\n"
+            "[bold cyan]4[/bold cyan]. Award Tender\n"
+        )
+    lines += (
+        "[bold cyan]5[/bold cyan]. Logout\n"
+        "[bold cyan]6[/bold cyan]. Exit"
+    )
+    console.print(Panel(
+        lines,
+        title=f"Welcome, {app.current_user.name} ({app.current_user.role})",
+        border_style="magenta",
+    ))
+
+
+def run():
+    app = App()
+    console.print("[bold green]Welcome to the Tender Management System[/bold green]")
+
+    while True:
+        if app.current_user is None:
+            show_logged_out_menu()
+            choice = Prompt.ask("Choose an option", choices=["1", "2", "3"])
+            if choice == "1":
+                app.register()
+            elif choice == "2":
+                app.login()
+            elif choice == "3":
+                console.print("[bold]Goodbye.[/bold]")
+                sys.exit(0)
+        else:
+            show_logged_in_menu(app)
+            valid = ["1", "2", "5", "6"]
+            if app.current_user.role == "admin":
+                valid = ["1", "2", "3", "4", "5", "6"]
+            choice = Prompt.ask("Choose an option", choices=valid)
+            if choice == "1":
+                app.add_tender()
+            elif choice == "2":
+                app.list_tenders()
+            elif choice == "3" and app.current_user.role == "admin":
+                app.close_tender()
+            elif choice == "4" and app.current_user.role == "admin":
+                app.award_tender()
+            elif choice == "5":
+                app.logout()
+            elif choice == "6":
+                console.print("[bold]Goodbye.[/bold]")
+                sys.exit(0)
 
 
 if __name__ == "__main__":
-    try:
-        BookCLI().run()
-    except KeyboardInterrupt:
-        print("\nApplication closed.")
+    run()
